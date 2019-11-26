@@ -1,8 +1,7 @@
 import re
-
-from util import Reporter, read_markdown, load_yaml, require
 import unittest
 import sys
+from bin.util import Reporter, read_markdown, load_yaml, require
 from io import StringIO
 import numpy as np  # we'll need this as the lessons require it
 import matplotlib  # ToDo Add NoQA for flake8
@@ -12,7 +11,7 @@ class BadFormatError(Exception):
     pass
 
 
-def get_code_and_output(element_list):
+def get_code_output_and_error(element_list):
     code = None
     output = None
     error = None
@@ -45,7 +44,6 @@ def get_code_and_output(element_list):
                             code_element += "'"
                         else:
                             code_element += child['value']
-
 
                 code_start = code_element.find('~~~\n') + 4
                 code_end = code_element.find('~~~', code_start)
@@ -87,14 +85,16 @@ def get_code_and_output(element_list):
         yield code, output, error
 
 
-def run_code(code, *args):
+def run_code_block(code, *args):
     if code in ('None', 'pass'):
-        return None
+        return None, None
 
     # ToDo Use contextlib redirect_stdout
     real_stdout = sys.stdout
     sys.stdout = StringIO()
     return_value = None
+    return_error = None
+    real_error_msg = None
 
     try:
         try:
@@ -102,9 +102,13 @@ def run_code(code, *args):
         except SyntaxError:
             # Assume that code is a statement, such as "a = 1", and execute it
             exec(code, *args)
-    except (IndexError, TypeError, SyntaxError) as e:
-        print('Caught error: {}\nContinuing anyay...'.format(e))
+    except Exception as e:
+        if type(e) in (IndexError, TypeError, SyntaxError, IndentationError, AssertionError):
+            return_error = re.search(r'\w*Error\b', str(type(e))).group(0)
+        else:
+            real_error_msg = 'Caught error: {} from: {}. Continuing anyay...'.format(e, code)
 
+    # if eval() didn't return anything, get output from redirected stdout
     if return_value is None:
         code_output = sys.stdout.getvalue()
 
@@ -125,35 +129,87 @@ def run_code(code, *args):
         return_value = str(return_value)
 
     sys.stdout = real_stdout
-    return return_value
+
+    if real_error_msg:
+        # Now that print works again
+        print(real_error_msg)
+
+    return return_value, return_error
 
 
-# def run_code_check_output(code, output):
-#     eval_value = run_code(code)
-#     return eval_value == output
+def run_lesson(md_elements, element_parser=get_code_output_and_error, code_runner=run_code_block):
+    globals_dict = dict()
+    code_runs = []
+    for i, (code, output, error) in enumerate(element_parser(md_elements)):
+        this_run = {'code_block': i+1}
+        actual_output, actual_error = code_runner(code, globals_dict)
+        if output and output != actual_output:
+            this_run['code'] = code
+            this_run['expected_output'] = output
+            this_run['actual_output'] = actual_output
+        if error and error != actual_error:
+            this_run['code'] = code
+            this_run['expected_error'] = error
+            this_run['actual_error'] = actual_error
+        code_runs.append(this_run)
+    return code_runs
+
 
 
 def main():
     # ToDo Test main()
-    processed_markdown = read_markdown('bin/markdown_ast.rb',
-                                       '_episodes/03-loop.md')
+    for doc in (
+            '01-intro.md', '02-numpy.md', '03-loop.md', '04-lists.md',
+            # '05-files.md',
+            '06-cond.md',
+            # '07-func.md',
+            # '08-errors.md',
+            '09-defensive.md', '10-debugging.md'
+            # , '11-cmdline.md'
+            ):
 
-    elements = processed_markdown['doc']['children']
-    globals_dict = dict()
-    for code, output in get_code_and_output(elements):
-        actual_output = run_code(code, globals_dict)
-        if output and output != actual_output:
-            print('Expected: {}\nActual:{}\n\n'.format(output, actual_output))
+        print("Processing", doc)
+        doc = '_episodes/' + doc
+        processed_markdown = read_markdown('bin/markdown_ast.rb', doc)
+        elements = processed_markdown['doc']['children']
 
+        problems = run_lesson(elements)
+
+        for problem in problems:
+            print(problem)
+
+
+class TestLessonRunner(unittest.TestCase):
+    def test_returns_list(self):
+        def yield_good_elements(*args):
+            yield 'some code', 'some output', 'some error'
+
+        def yield_wrong_error(*args):
+            yield 'some code', 'some output', 'wrong error'
+
+        def yield_wrong_output(*args):
+            yield 'some code', 'wrong output', 'some error'
+
+        def run_some_code(the_code, *args):
+            return 'some output', 'some error'
+
+        self.assertDictEqual({'code_block': 1},
+                             run_lesson((), yield_good_elements, run_some_code)[0])
+        self.assertDictEqual({'code_block': 1, 'code': 'some code', 'expected_error': 'wrong error', 'actual_error': 'some error'},
+                             run_lesson((), yield_wrong_error, run_some_code)[0])
+        self.assertDictEqual({'code_block': 1, 'code': 'some code', 'expected_output': 'wrong output', 'actual_output': 'some output'},
+                             run_lesson((), yield_wrong_output, run_some_code)[0])
 
 class TestCodeGenerator(unittest.TestCase):
     code1 = {'attr': {'class': 'language-python'},
             'children': [{'type': 'text',
                           'value': 'Any Python interpreter can be used as '
                                    'a calculator:\n~~~\n3 + 5 * 4\n~~~'}]}
+
     output1 = {'type': 'codeblock',
               'attr': {'class': 'output'},
               'value': '23\n'}
+
     error1 = {'type': 'codeblock',
               'attr': {'class': 'error'},
               'value': '-' * 75 + '\nIndexError                              '
@@ -163,20 +219,22 @@ class TestCodeGenerator(unittest.TestCase):
                                   ' 4 print(word[2])\n----> 5 print(word[3])\n'
                                   '\nIndexError: string index out of range\n',
               'options': {'location': 73, 'ial': {'class': 'error'}}}
+
     code2 = {'attr': {'class': 'language-python'},
             'children': [{'type': 'text',
                           'value': '~~~\n21 / 7\n~~~'}]}
+
     output2 = {'type': 'codeblock',
               'attr': {'class': 'output'},
               'value': '3\n'}
+
     error2 = {'type': 'codeblock',
               'attr': {'class': 'error'},
               'value': '-' * 75 + '\nTypeError'}
 
     def test_generator_handles_list(self):
-        document_iterator = get_code_and_output([self.code1, self.output1,
-                                                 self.code2, self.output2,
-                                                 self.error2])
+        document_iterator = get_code_output_and_error([self.code1, self.output1,
+                                                       self.code2, self.output2, self.error2])
         a, b, c = next(document_iterator)
         self.assertEqual('3 + 5 * 4', a)
         self.assertEqual('23', b)
@@ -187,44 +245,43 @@ class TestCodeGenerator(unittest.TestCase):
         self.assertEqual('3', b)
         self.assertEqual('TypeError', c)
 
-    # def test_raises_errors(self):
-    #     document_iterator = get_code_and_output([self.output1])
-    #     self.assertRaises(BadFormatError, lambda: next(document_iterator))
-    #
-    #     document_iterator = get_code_and_output([self.code1, self.output1,
-    #                                              self.output1])
-    #     next(document_iterator)
-    #     self.assertRaises(BadFormatError, lambda: next(document_iterator))
+    def test_raises_errors(self):
+        document_iterator = get_code_output_and_error([self.output1])
+        self.assertRaises(BadFormatError, lambda: next(document_iterator))
 
-    # ToDo Handle "Error" blocks in the markdown
+        document_iterator = get_code_output_and_error([self.code1, self.output1, self.output1])
+        self.assertRaises(BadFormatError, lambda: next(document_iterator))
 
 
 class TestCodeExecutor(unittest.TestCase):
     def test_expression(self):
-        self.assertEqual('23', run_code('3 + 5 * 4'))
-        self.assertEqual("'t'", run_code('"t"'))
+        self.assertTupleEqual(('23', None), run_code_block('3 + 5 * 4'))
+        self.assertTupleEqual(("'t'", None), run_code_block('"t"'))
 
     def test_none_pass(self):
-        self.assertEqual(None, run_code('None'))
-        self.assertEqual(None, run_code('pass'))
+        self.assertTupleEqual((None, None), run_code_block('None'))
+        self.assertTupleEqual((None, None), run_code_block('pass'))
 
     def test_statement(self):
-        self.assertEqual('bananagrams', run_code('print("bananagrams")'))
-        self.assertEqual('', run_code('print("")'))
-        self.assertEqual('\t', run_code('print("\t")'))
-        self.assertEqual(None, run_code('a = 1'))
-        self.assertEqual('30', run_code('a = 15\nprint(a*2)'))
+        self.assertTupleEqual(('bananagrams', None), run_code_block('print("bananagrams")'))
+        self.assertTupleEqual(('', None), run_code_block('print("")'))
+        self.assertTupleEqual(('\t', None), run_code_block('print("\t")'))
+        self.assertTupleEqual((None, None), run_code_block('a = 1'))
+        self.assertTupleEqual(('30', None), run_code_block('a = 15\nprint(a*2)'))
 
     def test_globals(self):
         globals_dict = dict()
-        run_code('kljahoiebnjs = 20', globals_dict)
-        self.assertEqual('20', run_code('print(kljahoiebnjs)', globals_dict))
+        run_code_block('kljahoiebnjs = 20', globals_dict)
+        self.assertTupleEqual(('20', None), run_code_block('print(kljahoiebnjs)', globals_dict))
 
+    def test_errors(self):
+        self.assertTupleEqual((None, 'IndexError'), run_code_block('a = "u"[44]'))
+        self.assertTupleEqual(('j', 'TypeError'), run_code_block('print("j")\na = "b" * "c"'))
 
         # ToDo I feel like there's a good reason this doesn't work
         # self.assertEqual('\n', run_code('print("\\n")'))
 
 
 if __name__ == '__main__':
-    unittest.main()
-    # main()
+    # unittest.main()
+    main()
