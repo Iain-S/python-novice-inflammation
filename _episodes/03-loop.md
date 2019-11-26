@@ -140,7 +140,8 @@ to repeat an operation --- in this case, printing --- once for each thing in a s
 The general form of a loop is:
 
 ~~~
-for variable in collection:
+for variable in (1, 2):
+    pass
     # do things using variable, such as print
 ~~~
 {: .language-python}

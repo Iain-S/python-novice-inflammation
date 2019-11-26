@@ -200,6 +200,11 @@ we can now read and reuse both ideas separately.
 We can reproduce the previous analysis with a much simpler `for` loop:
 
 ~~~
+import glob
+import numpy 
+import matplotlib
+import matplotlib.pyplot
+
 filenames = sorted(glob.glob('inflammation*.csv'))
 
 for filename in filenames[:3]:
