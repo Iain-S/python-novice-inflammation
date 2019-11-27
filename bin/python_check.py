@@ -1,25 +1,39 @@
 import re
 import unittest
 import sys
-from bin.util import Reporter, read_markdown, load_yaml, require
+from bin.util import read_markdown
 from io import StringIO
-import numpy as np  # we'll need this as the lessons require it
-import matplotlib  # ToDo Add NoQA for flake8
+
+# Check numpy and matplotlib are installed as they are used in the lesson
+import numpy  # noqa: F401
+import matplotlib  # noqa: F401
 
 
 class BadFormatError(Exception):
     pass
 
 
+def is_python_block(element):
+    return element.get('attr') and element['attr'].get('class') and element['attr']['class'] == 'language-python'
+
+
+def is_output_block(element):
+    return element.get('attr') and element['attr'].get('class') and element['attr']['class'] == 'output'
+
+
+def is_error_block(element):
+    return element.get('attr') and element['attr'].get('class') and element['attr']['class'] == 'error'
+
+
 def get_code_output_and_error(element_list):
+    """The element_list represents an episode with various kinds of code and text.  When we find a group of
+       python-output-error, python-output, python-error or python blocks, return them."""
     code = None
     output = None
     error = None
 
     for element in element_list:
-        if element.get('attr') and \
-                element['attr'].get('class') and \
-                element['attr']['class'] == 'language-python':
+        if is_python_block(element):
 
             if code:
                 # Two code blocks in a row
@@ -55,24 +69,19 @@ def get_code_output_and_error(element_list):
 
             code = code[:-1]  # .rstrip(' \n')
 
-        elif element.get('attr') and \
-                element['attr'].get('class') and \
-                element['attr']['class'] == 'output':
+        elif is_output_block(element):
 
             if output:
-                raise BadFormatError("Two output elements in a row.",
-                                     element)
+                # ToDo 07-func.md does, legitimately, have multiple consecutive outputs
+                raise BadFormatError("Two output elements in a row.", element)
 
             if not code:
-                raise BadFormatError("There should always be "
-                                         "code before output")
+                raise BadFormatError("There should always be code before output")
 
             output_element = element['value']
             output = output_element[:-1]  # .rstrip('\n')
 
-        elif element.get('attr') and \
-                element['attr'].get('class') and \
-                element['attr']['class'] == 'error':
+        elif is_error_block(element):
 
             if not code:
                 raise BadFormatError("Code should preceed Error")
@@ -85,7 +94,9 @@ def get_code_output_and_error(element_list):
         yield code, output, error
 
 
-def run_code_block(code, *args):
+def run_code_block(code, globals_dict=None):
+    """Given some Python code as a string, try to run it and return any output or errors."""
+
     if code in ('None', 'pass'):
         return None, None
 
@@ -98,15 +109,15 @@ def run_code_block(code, *args):
 
     try:
         try:
-            return_value = eval(code, *args)
+            return_value = eval(code, globals_dict)
         except SyntaxError:
             # Assume that code is a statement, such as "a = 1", and execute it
-            exec(code, *args)
+            exec(code, globals_dict)
     except Exception as e:
         if type(e) in (IndexError, TypeError, SyntaxError, IndentationError, AssertionError, NameError):
             return_error = re.search(r'\w*Error\b', str(type(e))).group(0)
         else:
-            real_error_msg = 'Caught error: {} from: {}. Continuing anyay...'.format(e, code)
+            real_error_msg = 'Caught error: {} from: {}. Continuing anyway...'.format(e, code)
 
     # if eval() didn't return anything, get output from redirected stdout
     if return_value is None:
@@ -121,7 +132,6 @@ def run_code_block(code, *args):
         else:
             # Strip \n from the end
             return_value = code_output[0:-1]
-            # return_value = code_output.rstrip('\n')
 
     elif type(return_value) == str:
         return_value = "'" + return_value + "'"
@@ -137,12 +147,14 @@ def run_code_block(code, *args):
     return return_value, return_error
 
 
-def run_lesson(md_elements, element_parser=get_code_output_and_error, code_runner=run_code_block):
+def run_episode(md_elements, element_parser=get_code_output_and_error, code_runner=run_code_block):
+    """Given a sequence of markdown elements for an episode, extract python code, expected outputs and expected errors.
+       Run the code and verify that it does give the expected output / raise the anticipated errors."""
     globals_dict = dict()
     code_runs = []
     for i, (code, output, error) in enumerate(element_parser(md_elements)):
         this_run = {'code_block': i+1}
-        actual_output, actual_error = code_runner(code, globals_dict)
+        actual_output, actual_error = code_runner(code, globals_dict=globals_dict)
         if output and output != actual_output:
             this_run['code'] = code
             this_run['expected_output'] = output
@@ -158,16 +170,18 @@ def run_lesson(md_elements, element_parser=get_code_output_and_error, code_runne
 def indent_output(key, value):
     """Formats key and value for printing"
        code_block: 12
-           some_key: value_line_1
-                     value_line_2"""
+           any_other_key: value_line_1
+                          value_line_2"""
     if key == 'code_block':
         return key, value
 
     else:
+        # Indent the key by four spaces
         indent = ' ' * 4
         return_key = indent + key
 
-        padding = ' ' * (len(key) + 2)  # "some_key" plus 2 for the ": "
+        # For any value after the first, indent by four spaces + the length of key + 2 (for the ": ")
+        padding = ' ' * (len(key) + 2)
         value_lines = value.split('\n')
 
         return_value = value_lines[0]
@@ -179,6 +193,7 @@ def indent_output(key, value):
 
 
 def main():
+    """For each episode, process the markdown and run the episode.  Format and print the output."""
     # ToDo Test main()
     for doc in (
             # '01-intro.md', '02-numpy.md', '03-loop.md', '04-lists.md',
@@ -196,7 +211,7 @@ def main():
         processed_markdown = read_markdown('bin/markdown_ast.rb', doc)
         elements = processed_markdown['doc']['children']
 
-        problems = run_lesson(elements)
+        problems = run_episode(elements)
 
         for problem in problems:
             for key, value in problem.items():
@@ -205,34 +220,36 @@ def main():
 
 class TestLessonRunner(unittest.TestCase):
     def test_returns_list(self):
-        def yield_good_elements(*args):
+        def yield_good_elements(_):
             yield 'some code', 'some output', 'some error'
 
-        def yield_wrong_error(*args):
+        def yield_wrong_error(_):
             yield 'some code', 'some output', 'wrong error'
 
-        def yield_wrong_output(*args):
+        def yield_wrong_output(_):
             yield 'some code', 'wrong output', 'some error'
 
-        def run_some_code(the_code, *args):
+        def run_some_code(_, **kwargs):
+            del kwargs
             return 'some output', 'some error'
 
         self.assertDictEqual({'code_block': 1},
-                             run_lesson((), yield_good_elements, run_some_code)[0])
+                             run_episode((), yield_good_elements, run_some_code)[0])
         self.assertDictEqual({'code_block': 1, 'code': 'some code', 'expected_error': 'wrong error', 'actual_error': 'some error'},
-                             run_lesson((), yield_wrong_error, run_some_code)[0])
+                             run_episode((), yield_wrong_error, run_some_code)[0])
         self.assertDictEqual({'code_block': 1, 'code': 'some code', 'expected_output': 'wrong output', 'actual_output': 'some output'},
-                             run_lesson((), yield_wrong_output, run_some_code)[0])
+                             run_episode((), yield_wrong_output, run_some_code)[0])
+
 
 class TestCodeGenerator(unittest.TestCase):
     code1 = {'attr': {'class': 'language-python'},
-            'children': [{'type': 'text',
+             'children': [{'type': 'text',
                           'value': 'Any Python interpreter can be used as '
                                    'a calculator:\n~~~\n3 + 5 * 4\n~~~'}]}
 
     output1 = {'type': 'codeblock',
-              'attr': {'class': 'output'},
-              'value': '23\n'}
+               'attr': {'class': 'output'},
+               'value': '23\n'}
 
     error1 = {'type': 'codeblock',
               'attr': {'class': 'error'},
@@ -245,12 +262,12 @@ class TestCodeGenerator(unittest.TestCase):
               'options': {'location': 73, 'ial': {'class': 'error'}}}
 
     code2 = {'attr': {'class': 'language-python'},
-            'children': [{'type': 'text',
+             'children': [{'type': 'text',
                           'value': '~~~\n21 / 7\n~~~'}]}
 
     output2 = {'type': 'codeblock',
-              'attr': {'class': 'output'},
-              'value': '3\n'}
+               'attr': {'class': 'output'},
+               'value': '3\n'}
 
     error2 = {'type': 'codeblock',
               'attr': {'class': 'error'},
@@ -295,8 +312,8 @@ class TestCodeExecutor(unittest.TestCase):
 
     def test_globals(self):
         globals_dict = dict()
-        run_code_block('kljahoiebnjs = 20', globals_dict)
-        self.assertTupleEqual(('20', None), run_code_block('print(kljahoiebnjs)', globals_dict))
+        run_code_block('kljahoiebnjs = 20', globals_dict=globals_dict)
+        self.assertTupleEqual(('20', None), run_code_block('print(kljahoiebnjs)', globals_dict=globals_dict))
 
     def test_errors(self):
         self.assertTupleEqual((None, 'IndexError'), run_code_block('a = "u"[44]'))
@@ -312,7 +329,7 @@ class TestFormatting(unittest.TestCase):
         self.assertTupleEqual(('    some_key', 'some_val\n              other_val'), indent_output('some_key', 'some_val\nother_val'))
 
     def test_code_block(self):
-        self.assertTupleEqual(('code_block','some_val'), indent_output('code_block', 'some_val'))
+        self.assertTupleEqual(('code_block', 'some_val'), indent_output('code_block', 'some_val'))
 
 
 if __name__ == '__main__':
