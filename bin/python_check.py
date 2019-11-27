@@ -103,7 +103,7 @@ def run_code_block(code, *args):
             # Assume that code is a statement, such as "a = 1", and execute it
             exec(code, *args)
     except Exception as e:
-        if type(e) in (IndexError, TypeError, SyntaxError, IndentationError, AssertionError):
+        if type(e) in (IndexError, TypeError, SyntaxError, IndentationError, AssertionError, NameError):
             return_error = re.search(r'\w*Error\b', str(type(e))).group(0)
         else:
             real_error_msg = 'Caught error: {} from: {}. Continuing anyay...'.format(e, code)
@@ -155,17 +155,40 @@ def run_lesson(md_elements, element_parser=get_code_output_and_error, code_runne
     return code_runs
 
 
+def indent_output(key, value):
+    """Formats key and value for printing"
+       code_block: 12
+           some_key: value_line_1
+                     value_line_2"""
+    if key == 'code_block':
+        return key, value
+
+    else:
+        indent = ' ' * 4
+        return_key = indent + key
+
+        padding = ' ' * (len(key) + 2)  # "some_key" plus 2 for the ": "
+        value_lines = value.split('\n')
+
+        return_value = value_lines[0]
+
+        for line in value_lines[1:]:
+            return_value += '\n' + indent + padding + line
+
+        return return_key, return_value
+
 
 def main():
     # ToDo Test main()
     for doc in (
-            '01-intro.md', '02-numpy.md', '03-loop.md', '04-lists.md',
+            # '01-intro.md', '02-numpy.md', '03-loop.md', '04-lists.md',
             # '05-files.md',
-            '06-cond.md',
+            # '06-cond.md',
             # '07-func.md',
             # '08-errors.md',
-            '09-defensive.md', '10-debugging.md'
-            # , '11-cmdline.md'
+            '09-defensive.md',
+            # '10-debugging.md',
+            # '11-cmdline.md',
             ):
 
         print("Processing", doc)
@@ -176,7 +199,8 @@ def main():
         problems = run_lesson(elements)
 
         for problem in problems:
-            print(problem)
+            for key, value in problem.items():
+                print('{}: {}'.format(*indent_output(key, value)))
 
 
 class TestLessonRunner(unittest.TestCase):
@@ -280,6 +304,15 @@ class TestCodeExecutor(unittest.TestCase):
 
         # ToDo I feel like there's a good reason this doesn't work
         # self.assertEqual('\n', run_code('print("\\n")'))
+
+
+class TestFormatting(unittest.TestCase):
+    def test_everything_else(self):
+        self.assertTupleEqual(('    some_key', 'some_val'), indent_output('some_key', 'some_val'))
+        self.assertTupleEqual(('    some_key', 'some_val\n              other_val'), indent_output('some_key', 'some_val\nother_val'))
+
+    def test_code_block(self):
+        self.assertTupleEqual(('code_block','some_val'), indent_output('code_block', 'some_val'))
 
 
 if __name__ == '__main__':
