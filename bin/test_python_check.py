@@ -1,7 +1,6 @@
 import unittest
 import python_check
 import unittest.mock as mock
-from io import StringIO
 
 
 class TestLessonRunner(unittest.TestCase):
@@ -133,9 +132,17 @@ class TestCodeExecutor(unittest.TestCase):
         self.assertTupleEqual((None, 'IndexError'), python_check.run_code_block('a = "u"[44]'))
         self.assertTupleEqual(('j', 'TypeError'), python_check.run_code_block('print("j")\na = "b" * "c"'))
 
-        with mock.patch('sys.stdout', new_callable=StringIO) as mock_stdout:
-            python_check.run_code_block('1/0')
-            self.assertEqual('Caught error: division by zero from: 1/0. Continuing anyway...\n', mock_stdout.getvalue())
+        normal_warning_function = python_check.logger.warning
+        mock_stdout = ''
+
+        def save_warning(msg):
+            nonlocal mock_stdout
+            mock_stdout += msg
+
+        python_check.logger.warning = save_warning
+        python_check.run_code_block('1/0')
+        self.assertEqual('Caught error: division by zero from: 1/0. Continuing anyway...', mock_stdout)
+        python_check.logger.warning = normal_warning_function
 
         # ToDo I feel like there's a good reason this doesn't work
         # self.assertEqual('\n', run_code('print("\\n")'))
@@ -147,6 +154,8 @@ class TestFormatting(unittest.TestCase):
                               python_check.indent_output('some_key', 'some_val'))
         self.assertTupleEqual(('    some_key', 'some_val\n              other_val'),
                               python_check.indent_output('some_key', 'some_val\nother_val'))
+        self.assertTupleEqual(('    some_key', ''),
+                              python_check.indent_output('some_key', None))
 
     def test_code_block(self):
         self.assertTupleEqual(('code_block', 'some_val'), python_check.indent_output('code_block', 'some_val'))
@@ -157,14 +166,25 @@ class TestMain(unittest.TestCase):
              'value': '1 is 1\n'}
 
     def test_main_function(self):
-        with mock.patch('sys.stdout', new_callable=StringIO) as mock_stdout:
-            with mock.patch('python_check.read_markdown') as mock_read_markdown:
-                mock_read_markdown.return_value = {'doc': {'children': (self.code1,)}}
-                python_check.main()
+        # with mock.patch('sys.stdout', new_callable=StringIO) as mock_stdout:
+        normal_info_function = python_check.logger.info
+        mock_stdout = ''
 
-            # mock_read_markdown.return_value.assert_called_with('20-feedback.md')
-            self.assertEqual(10, mock_read_markdown.call_count)
-        self.assertIn('Processing 20-feedback.md', mock_stdout.getvalue())
+        def save_info(msg):
+            nonlocal mock_stdout
+            mock_stdout += msg
+
+        python_check.logger.info = save_info
+
+        with mock.patch('python_check.read_markdown') as mock_read_markdown:
+            mock_read_markdown.return_value = {'doc': {'children': (self.code1,)}}
+            python_check.main()
+
+        python_check.logger.info = normal_info_function
+
+        # mock_read_markdown.return_value.assert_called_with('20-feedback.md')
+        self.assertEqual(10, mock_read_markdown.call_count)
+        self.assertIn('Processing 20-feedback.md', mock_stdout)
 
 
 if __name__ == '__main__':

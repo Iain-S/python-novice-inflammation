@@ -2,10 +2,10 @@
 #!/usr/bin/env python3
 import re
 import sys
-# import logging
+import logging
 from util import read_markdown
 from io import StringIO
-
+from contextlib import redirect_stdout
 
 # Check numpy and matplotlib are installed as they are used in the inflammation lesson
 import numpy  # noqa: F401
@@ -15,34 +15,22 @@ import matplotlib  # noqa: F401
 import pandas  # noqa: F401
 
 
-# logger = logging.get_logger()
+logging.basicConfig()
+logger = logging.getLogger('python_check')
+logger.setLevel('INFO')
 
 
 # Todo command line args
+# Todo use difflib to show differences
 # Todo run all of inflammation
-# Todo print -> logging
-# Todo context manager for stringio
+# Todo logging formatting
+# ToDo refactor the large functions
 class BadFormatError(Exception):
     pass
 
 
-def is_block_of_class(element, md_class_name):
+def is_element_of_class(element, md_class_name):
     return element.get('attr') and element['attr'].get('class') and element['attr']['class'] == md_class_name
-
-
-def is_python_block(element):
-    # return element.get('attr') and element['attr'].get('class') and element['attr']['class'] == 'language-python'
-    return is_block_of_class(element, 'language-python')
-
-
-def is_output_block(element):
-    # return element.get('attr') and element['attr'].get('class') and element['attr']['class'] == 'output'
-    return is_block_of_class(element, 'output')
-
-
-def is_error_block(element):
-    # return element.get('attr') and element['attr'].get('class') and element['attr']['class'] == 'error'
-    return is_block_of_class(element, 'error')
 
 
 def get_code_output_and_error(element_list):
@@ -53,7 +41,7 @@ def get_code_output_and_error(element_list):
     error = None
 
     for element in element_list:
-        if is_python_block(element):
+        if is_element_of_class(element, 'language-python'):
 
             if code:
                 # Two code blocks in a row
@@ -61,7 +49,9 @@ def get_code_output_and_error(element_list):
                 output = None
                 error = None
 
-            try:
+            if 'value' in element:
+                code = element['value']
+            else:
                 code_element = None
                 for child in element['children']:
                     if child['value'].count('~~~') == 2:
@@ -85,13 +75,9 @@ def get_code_output_and_error(element_list):
                     raise BadFormatError('There should be a closing ~~~.')
                 code = code_element[code_start:code_end]
 
-            except KeyError:
-                # If the element has no children
-                code = element['value']
-
             code = code[:-1]  # .rstrip(' \n')
 
-        elif is_output_block(element):
+        elif is_element_of_class(element, 'output'):
 
             if output:
                 # ToDo 07-func.md does, legitimately, have multiple consecutive outputs
@@ -103,7 +89,7 @@ def get_code_output_and_error(element_list):
             output_element = element['value']
             output = output_element[:-1]  # .rstrip('\n')
 
-        elif is_error_block(element):
+        elif is_element_of_class(element, 'error'):
 
             if not code:
                 raise BadFormatError("Code should preceed Error")
@@ -122,74 +108,74 @@ def run_code_block(code, globals_dict=None):
     if code in ('None', 'pass'):
         return None, None
 
-    # ToDo Use contextlib redirect_stdout
-    real_stdout = sys.stdout
-    sys.stdout = StringIO()
-    return_value = None
-    return_error = None
-    real_error_msg = None
+    temp_stdout = StringIO()
+    with redirect_stdout(temp_stdout):
+        return_value = None
+        return_error = None
+        real_error_msg = None
 
-    try:
         try:
-            # if '99th element' in code:
-            #     print(eval('element'))
-            return_value = eval(code, globals_dict)
-        except SyntaxError:
-            # Assume that code is a statement, such as "a = 1", and execute it
-            # if '99th element' in code:
-            #     print(eval('element'))
-            exec(code, globals_dict)
-    except Exception as e:
-        if type(e) in (IndexError, TypeError, SyntaxError, IndentationError, AssertionError, NameError):
-            return_error = re.search(r'\w*Error\b', str(type(e))).group(0)
+            try:
+                return_value = eval(code, globals_dict)
+            except SyntaxError:
+                # A SyntaxError could mean that that the code is a statement, such as "a = 1"
+                # In that case, we use exec instead of eval
+                exec(code, globals_dict)
+        except Exception as e:
+            # These are the types of errors we expect from the lesson code
+            if type(e) in (IndexError, TypeError, SyntaxError, IndentationError, AssertionError, NameError):
+                return_error = re.search(r'\w*Error\b', str(type(e))).group(0)
+            else:
+                real_error_msg = 'Caught error: {} from: {}. Continuing anyway...'.format(e, code)
+
+        # If eval() didn't return anything, get output from redirected stdout
+        if return_value is None:
+            code_output = sys.stdout.getvalue()
+
+            if code_output == '':
+                # Leave it as None
+                pass
+            elif code_output == '\n':
+                # Special case for, e.g., print("")
+                return_value = ''
+            else:
+                # Strip \n from the end
+                return_value = code_output[0:-1]
+
+        elif type(return_value) == str:
+            return_value = "'" + return_value + "'"
         else:
-            real_error_msg = 'Caught error: {} from: {}. Continuing anyway...'.format(e, code)
-
-    # if eval() didn't return anything, get output from redirected stdout
-    if return_value is None:
-        code_output = sys.stdout.getvalue()
-
-        if code_output == '':
-            # Leave it as None
-            pass
-        elif code_output == '\n':
-            # Special case for, e.g., print("")
-            return_value = ''
-        else:
-            # Strip \n from the end
-            return_value = code_output[0:-1]
-
-    elif type(return_value) == str:
-        return_value = "'" + return_value + "'"
-    else:
-        return_value = str(return_value)
-
-    sys.stdout = real_stdout
+            return_value = str(return_value)
 
     if real_error_msg:
-        # Now that print works again
-        print(real_error_msg)
+        # Now that output works normally again
+        logger.warning(real_error_msg)
 
     return return_value, return_error
 
 
 def run_episode(md_elements, element_parser=get_code_output_and_error, code_runner=run_code_block):
-    """Given a sequence of markdown elements for an episode, extract python code, expected outputs and expected errors.
+    """Given a sequence of markdown elements, extract python code, expected outputs and expected errors.
        Run the code and verify that it does give the expected output / raise the anticipated errors."""
     globals_dict = dict()
     code_runs = []
     for i, (code, output, error) in enumerate(element_parser(md_elements)):
         this_run = {'code_block': i+1}
+
         actual_output, actual_error = code_runner(code, globals_dict=globals_dict)
+
         if output and output != actual_output:
             this_run['code'] = code
             this_run['expected_output'] = output
             this_run['actual_output'] = actual_output
+
         if error and error != actual_error:
             this_run['code'] = code
             this_run['expected_error'] = error
             this_run['actual_error'] = actual_error
+
         code_runs.append(this_run)
+
     return code_runs
 
 
@@ -198,6 +184,8 @@ def indent_output(key, value):
        code_block: 12
            any_other_key: value_line_1
                           value_line_2"""
+    value = '' if value is None else value
+
     if key == 'code_block':
         return key, value
 
@@ -252,7 +240,7 @@ def main():
             '20-feedback.md'
             ):
 
-        print("Processing", doc)
+        logger.info("Processing {}".format(doc))
         doc = '_episodes/' + doc
         processed_markdown = read_markdown('bin/markdown_ast.rb', doc)
         elements = processed_markdown['doc']['children']
@@ -261,7 +249,7 @@ def main():
 
         for problem in problems:
             for key, value in problem.items():
-                print('{}: {}'.format(*indent_output(key, value)))
+                logger.info('{}: {}'.format(key, value if value is not None else ''))
 
 
 if __name__ == '__main__':
