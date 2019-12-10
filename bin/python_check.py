@@ -3,6 +3,9 @@
 import re
 import sys
 import logging
+from os.path import join, isdir
+from os import listdir
+from argparse import ArgumentParser
 from util import read_markdown
 from io import StringIO
 from contextlib import redirect_stdout
@@ -17,10 +20,8 @@ import pandas  # noqa: F401
 
 logging.basicConfig()
 logger = logging.getLogger('python_check')
-logger.setLevel('INFO')
 
 
-# Todo command line args
 # Todo use difflib to show differences
 # Todo run all of inflammation
 # Todo logging formatting
@@ -206,50 +207,86 @@ def indent_output(key, value):
         return return_key, return_value
 
 
+def parse_args(args):
+    """Parse the command line arguments, returning a tuple:
+       (stop on error, verbose output, list of files to process)"""
+
+    parser = ArgumentParser(description="check the Python in markdown files.")
+    parser.add_argument('directory', type=str, help="check all .md files in this directory, unless -f is used")
+    parser.add_argument('-f', type=str, nargs='*', help="a list of filenames to check in directory")
+    parser.add_argument('-v', required=False, type=bool, default=False, help="give verbose output")
+    # ToDo We could add this to fail after the first error in a lesson
+    # parser.add_argument('-s', required=False, type=bool, default=False, help="stop if an error occurs")
+
+    arguments = parser.parse_args(args)
+
+    assert isdir(arguments.directory)
+
+    if arguments.f:
+        files = [join(arguments.directory, file) for file in arguments.f]
+    else:
+        files = [join(arguments.directory, file) for file in listdir(arguments.directory) if file.endswith('.md')]
+
+    return arguments.v, files
+
+        # (
+        #     # '01-intro.md', '02-numpy.md', '03-loop.md', '04-lists.md',
+        #     # '05-files.md',
+        #     # '06-cond.md',
+        #     # '07-func.md',
+        #     # '08-errors.md',
+        #     # '09-defensive.md',
+        #     # '10-debugging.md',
+        #     # '11-cmdline.md',
+        #     # '01-run-quit.md',
+        #     # '02-variables.md',
+        #     # '03-types-conversion.md',
+        #     # '04-built-in.md',
+        #     # '05-coffee.md',
+        #     # '06-libraries.md',
+        #     # '07-reading-tabular.md',
+        #     # '08-data-frames.md',
+        #     # '09-plotting.md',
+        #     # '10-lunch.md',
+        #     '11-lists.md',
+        #     '12-for-loops.md',
+        #     '13-looping-data-sets.md',
+        #     '14-writing-functions.md',
+        #     '15-scope.md',
+        #     '16-coffee.md',
+        #     '17-conditionals.md',
+        #     '18-style.md',
+        #     '19-wrap.md',
+        #     '20-feedback.md'
+        #     )
+
+
 def main():
     """For each episode, process the markdown and run the episode.  Format and print the output."""
-    # ToDo Test main()
-    for doc in (
-            # '01-intro.md', '02-numpy.md', '03-loop.md', '04-lists.md',
-            # '05-files.md',
-            # '06-cond.md',
-            # '07-func.md',
-            # '08-errors.md',
-            # '09-defensive.md',
-            # '10-debugging.md',
-            # '11-cmdline.md',
-            # '01-run-quit.md',
-            # '02-variables.md',
-            # '03-types-conversion.md',
-            # '04-built-in.md',
-            # '05-coffee.md',
-            # '06-libraries.md',
-            # '07-reading-tabular.md',
-            # '08-data-frames.md',
-            # '09-plotting.md',
-            # '10-lunch.md',
-            '11-lists.md',
-            '12-for-loops.md',
-            '13-looping-data-sets.md',
-            '14-writing-functions.md',
-            '15-scope.md',
-            '16-coffee.md',
-            '17-conditionals.md',
-            '18-style.md',
-            '19-wrap.md',
-            '20-feedback.md'
-            ):
 
-        logger.info("Processing {}".format(doc))
-        doc = '_episodes/' + doc
-        processed_markdown = read_markdown('bin/markdown_ast.rb', doc)
+    verbose_output, files = parse_args(sys.argv[1:])
+
+    if verbose_output:
+        logger.setLevel(logging.INFO)
+    else:
+        logger.setLevel(logging.WARNING)
+
+    for file in files:
+
+        logger.info("Processing {}".format(file))
+        processed_markdown = read_markdown('bin/markdown_ast.rb', file)
         elements = processed_markdown['doc']['children']
 
-        problems = run_episode(elements)
+        results = run_episode(elements)
 
-        for problem in problems:
-            for key, value in problem.items():
-                logger.info('{}: {}'.format(key, value if value is not None else ''))
+        for result in results:
+            for key, value in result.items():
+                if key == 'code_block':
+                    logger.info('{}: {}'.format(key, value if value else ''))
+                else:
+                    logger.warning('{}: {}'.format(key, value if value else ''))
+
+    # ToDo exit(errors)
 
 
 if __name__ == '__main__':

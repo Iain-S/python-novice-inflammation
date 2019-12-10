@@ -1,6 +1,7 @@
 import unittest
 import python_check
 import unittest.mock as mock
+import logging
 
 
 class TestLessonRunner(unittest.TestCase):
@@ -20,8 +21,10 @@ class TestLessonRunner(unittest.TestCase):
 
         self.assertDictEqual({'code_block': 1},
                              python_check.run_episode((), yield_good_elements, run_some_code)[0])
+
         self.assertDictEqual({'code_block': 1, 'code': 'some code', 'expected_error': 'wrong error', 'actual_error': 'some error'},
                              python_check.run_episode((), yield_wrong_error, run_some_code)[0])
+
         self.assertDictEqual({'code_block': 1, 'code': 'some code', 'expected_output': 'wrong output', 'actual_output': 'some output'},
                              python_check.run_episode((), yield_wrong_output, run_some_code)[0])
 
@@ -161,30 +164,69 @@ class TestFormatting(unittest.TestCase):
         self.assertTupleEqual(('code_block', 'some_val'), python_check.indent_output('code_block', 'some_val'))
 
 
+class TestArgParsing(unittest.TestCase):
+    def test_raises_exception(self):
+        # The only mandatory argument is a directory
+        self.assertRaises(SystemExit, lambda: python_check.parse_args([]))
+        self.assertRaises(AssertionError, lambda: python_check.parse_args(["this_directory_doesn't_exist"]))
+
+    def test_files_listed(self):
+        # If we specify the files, they should be returned
+        with mock.patch('python_check.isdir', new=lambda x: True):
+            self.assertListEqual(['some_dir/file1', 'some_dir/file2'],
+                                 python_check.parse_args(['some_dir', '-f', 'file1', 'file2'])[1])
+
+    def test_directory_only(self):
+        # If we don't specify the files, listdir() should be used
+        with mock.patch('python_check.isdir', new=lambda x: True):
+            with mock.patch('python_check.listdir', new=lambda x: ['file_a.md', 'file_b.md']):
+                self.assertListEqual(['some_dir/file_a.md', 'some_dir/file_b.md'],
+                                     python_check.parse_args(['some_dir'])[1])
+
+            with mock.patch('python_check.listdir', new=lambda x: ['file_a', 'file_b']):
+                self.assertListEqual([],
+                                     python_check.parse_args(['some_dir'])[1])
+
+
 class TestMain(unittest.TestCase):
     code1 = {'attr': {'class': 'language-python'},
              'value': '1 is 1\n'}
+    output1 = {'type': 'codeblock',
+               'attr': {'class': 'output'},
+               'value': 'False'}
 
     def test_main_function(self):
-        # with mock.patch('sys.stdout', new_callable=StringIO) as mock_stdout:
-        normal_info_function = python_check.logger.info
-        mock_stdout = ''
+        with mock.patch('python_check.parse_args') as mock_args:
+            mock_args.return_value = (True, (str(i) for i in range(10)))
 
-        def save_info(msg):
-            nonlocal mock_stdout
-            mock_stdout += msg
+            normal_info_function = python_check.logger.info
+            mock_stdout = ''
 
-        python_check.logger.info = save_info
+            def save_info(msg):
+                nonlocal mock_stdout
+                mock_stdout += msg
 
-        with mock.patch('python_check.read_markdown') as mock_read_markdown:
-            mock_read_markdown.return_value = {'doc': {'children': (self.code1,)}}
-            python_check.main()
+            python_check.logger.info = save_info
+
+            with mock.patch('python_check.read_markdown') as mock_read_markdown:
+                mock_read_markdown.return_value = {'doc': {'children': (self.code1, self.output1)}}
+                python_check.main()
 
         python_check.logger.info = normal_info_function
 
         # mock_read_markdown.return_value.assert_called_with('20-feedback.md')
         self.assertEqual(10, mock_read_markdown.call_count)
-        self.assertIn('Processing 20-feedback.md', mock_stdout)
+        self.assertIn('Processing 9', mock_stdout)
+
+    def test_verbose_output(self):
+        # Note that the order of these matters as changes persist to the end of the tests
+        with mock.patch('python_check.parse_args', new=lambda x: (False, [])):
+            python_check.main()
+            self.assertEqual(logging.WARNING, python_check.logger.getEffectiveLevel())
+
+        with mock.patch('python_check.parse_args', new=lambda x: (True, [])):
+            python_check.main()
+            self.assertEqual(logging.INFO, python_check.logger.getEffectiveLevel())
 
 
 if __name__ == '__main__':
