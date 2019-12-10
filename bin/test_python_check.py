@@ -22,11 +22,21 @@ class TestLessonRunner(unittest.TestCase):
         self.assertDictEqual({'code_block': 1},
                              python_check.run_episode((), yield_good_elements, run_some_code)[0])
 
-        self.assertDictEqual({'code_block': 1, 'code': 'some code', 'expected_error': 'wrong error', 'actual_error': 'some error'},
+        self.assertDictEqual({'code_block': 1,
+                              'code': 'some code',
+                              'expected_error': 'wrong error',
+                              'actual_error': 'some error',
+                              'error_diff': ['- wrong error', '+ some error']},
                              python_check.run_episode((), yield_wrong_error, run_some_code)[0])
 
-        self.assertDictEqual({'code_block': 1, 'code': 'some code', 'expected_output': 'wrong output', 'actual_output': 'some output'},
+        self.assertDictEqual({'code_block': 1,
+                              'code': 'some code',
+                              'expected_output': 'wrong output',
+                              'actual_output': 'some output',
+                              'output_diff': ['- wrong output', '+ some output']},
                              python_check.run_episode((), yield_wrong_output, run_some_code)[0])
+
+        # ToDo What happens if the output and the error are wrong?
 
 
 class TestCodeGenerator(unittest.TestCase):

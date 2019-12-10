@@ -9,6 +9,7 @@ from argparse import ArgumentParser
 from util import read_markdown
 from io import StringIO
 from contextlib import redirect_stdout
+from difflib import Differ
 
 # Check numpy and matplotlib are installed as they are used in the inflammation lesson
 import numpy  # noqa: F401
@@ -22,7 +23,6 @@ logging.basicConfig()
 logger = logging.getLogger('python_check')
 
 
-# Todo use difflib to show differences
 # Todo run all of inflammation
 # Todo logging formatting
 # ToDo refactor the large functions
@@ -160,20 +160,26 @@ def run_episode(md_elements, element_parser=get_code_output_and_error, code_runn
        Run the code and verify that it does give the expected output / raise the anticipated errors."""
     globals_dict = dict()
     code_runs = []
-    for i, (code, output, error) in enumerate(element_parser(md_elements)):
+    for i, (code, expected_output, expected_error) in enumerate(element_parser(md_elements)):
         this_run = {'code_block': i+1}
 
         actual_output, actual_error = code_runner(code, globals_dict=globals_dict)
 
-        if output and output != actual_output:
-            this_run['code'] = code
-            this_run['expected_output'] = output
-            this_run['actual_output'] = actual_output
+        differ = Differ()
 
-        if error and error != actual_error:
+        if expected_output and expected_output != actual_output:
             this_run['code'] = code
-            this_run['expected_error'] = error
+            this_run['expected_output'] = expected_output
+            this_run['actual_output'] = actual_output
+            this_run['output_diff'] = list(differ.compare(expected_output.splitlines(keepends=True),
+                                                          actual_output.splitlines(keepends=True)))
+
+        if expected_error and expected_error != actual_error:
+            this_run['code'] = code
+            this_run['expected_error'] = expected_error
             this_run['actual_error'] = actual_error
+            this_run['error_diff'] = list(differ.compare(expected_error.splitlines(keepends=True),
+                                                           actual_error.splitlines(keepends=True)))
 
         code_runs.append(this_run)
 
@@ -283,8 +289,14 @@ def main():
             for key, value in result.items():
                 if key == 'code_block':
                     logger.info('{}: {}'.format(key, value if value else ''))
-                else:
-                    logger.warning('{}: {}'.format(key, value if value else ''))
+                elif key == 'code':
+                    logger.warning('code')
+                    for line in value.splitlines():
+                        logger.warning('    '+line)
+                elif key.endswith('diff'):
+                    logger.warning(key)
+                    for line in value:
+                        logger.warning('    '+line.rstrip())
 
     # ToDo exit(errors)
 
